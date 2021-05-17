@@ -1,0 +1,101 @@
+############################### PACKAGE DOWNLOADING & LOADING ############################### 
+
+#download packages#
+
+#install.packages("sandwich")
+#install.packages("gmm")
+#install.packages("minpack.lm")
+
+#load packages#end
+
+rm(list=ls())
+library("sandwich")
+library("gmm")
+
+############################### DATA GATHERING & CLEANING ###############################  
+
+data <- read.csv("advecon.csv", header=TRUE,sep=';',dec=",")
+#data.df <- cbind(consgrowth=diff(log(data$consoreal))+1,oney=1+data$oneyreal[-1]/100,excess=diff(log(data$sp))-data$oney[-1]/100)
+data.df_ins <- cbind(cratio=diff(log(data[-1,]$consoreal))+1,oney=1+data[3:nrow(data),]$oneyreal/100,excess=diff(log(data[-1,]$sp))-data[3:nrow(data),]$oney/100,cratio_lag=diff(log(data[-nrow(data),]$consoreal))+1)
+
+############################### ESTIMATION ###############################  
+
+### We build up the moment functions g ###
+
+## More specifically, we create 4 moment functions taking different exogenous theta parameters, as in Almeida ##
+
+theta_list<-list(1,5,20,50)
+
+for(i in theta_list) {
+  assign(paste0("euler.moments_", i),function(parm,x=NULL) {
+    # parm = beta
+    # data = (C(t+1)/C(t),1+Rf(t+1),RJ(t+1)-Rf(t+1),C(t)/C(t-1))
+    n.col = ncol(x)
+    sdf = parm[1]*x[,1]^(-i)
+    d1 = sdf*x[,2] - 1
+    d2 = as.matrix(rep(sdf,(n.col-3))*x[,3]) 
+    d3 = d1*x[,n.col]
+    d4 = d2*x[,n.col]
+    return(cbind(d1,d2,d3,d4))
+  } ) 
+}
+
+start.vals <- 1
+names(start.vals) = "beta"
+
+method_list<-list("EL","ET","CUE","HD")
+
+### We estimate beta for each exogenous theta & and for each type of estimation (EL,ET,CUE) ###
+
+for (j in method_list){
+  for(i in theta_list) {
+    ## Estimation ##
+    assign(paste0(paste0("res_", i),j), gel(g=get(paste0("euler.moments_",i)), x=data.df_ins,tet0=start.vals,type=j,smooth=TRUE)) 
+  }
+}
+
+############################### GRAPH PLOTTING ###############################  
+
+## We compute the implied probability for the EL method ##
+
+for(i in theta_list) {
+  
+  mamom <- t(get(paste0("euler.moments_",i))(get(paste0(paste0("res_", i),"EL"))$coefficients,data.df_ins))
+  veclam<-get(paste0(paste0("res_", i),"EL"))$lambda
+  implied<-t(veclam%*%mamom)
+  impliednew<-matrix(0,ncol(mamom),1)
+  for (v in 1:ncol(mamom)) {
+    impliednew[v]<-1/(ncol(mamom)*(1+implied[v]))
+  }
+  assign(paste0("impliednew",i),impliednew)
+}
+
+## We compute the implied SDFs and the correlation between the latter and the S&P returns ##
+
+for (j in method_list){
+  for(i in theta_list) {
+    x=matrix(0,ncol(mamom),1)
+    for (v in 1:length(x)){
+      x[v] <-get(paste0(paste0("res_", i),j))$coefficients*data.df_ins[,1][v]^(-i)
+    }
+    assign(paste0(paste0("corr_",i),j),cor(x,data.df_ins[,3]-data.df_ins[,2]+1))
+    assign(paste0(paste0("impliedsdf_",i),j),x)
+  }
+}
+
+
+## Plotting ##
+
+# Implied SDFs #
+
+plot(impliedsdf_1HD,main="HD implied SDF with theta=1", xlab="Period from 1891 to 2009",type="l",col="aquamarine3")
+plot(impliedsdf_5EL, main="EL implied SDF with theta=5", xlab="Period from 1891 to 2009",type="l",col="aquamarine3")
+plot(impliedsdf_20CUE, main="CUE implied SDF with theta=20", xlab="Period from 1891 to 2009",type="l",col="aquamarine3")
+plot(impliedsdf_50ET, main="ET implied SDF with theta=50", xlab="Period from 1891 to 2009",type="l",col="aquamarine3")
+
+# Implied probabilities #
+
+plot(impliednew1,main="EL implied probability with theta=1",xlab="Period from 1891 to 2009",xlim=c(1,ncol(mamom)),ylim=c(min(impliednew1)-0.01,max(impliednew1)),type="l",col="chocolate2")
+abline(h=1/nrow(impliednew1),col="blue")
+
+
